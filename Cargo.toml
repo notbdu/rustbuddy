@@ -2,5 +2,7 @@
 name = "rustbuddy"
 version = "0.1.0"
 authors = ["Bo Du <bo@capsule8.com>"]
+description = "Rust implementation of the buddy memory allocation algorithm"
+license = "MIT/Apache-2.0"
 
 [dependencies]
