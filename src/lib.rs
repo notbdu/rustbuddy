@@ -1,14 +1,17 @@
 use std::vec;
 
-const NODE_UNUSED: u8 = 0;
-const NODE_USED: u8 = 1;
-const NODE_SPLIT: u8 = 2;
-const NODE_FULL: u8 = 3;
-
+#[repr(u8)]
+#[derive(PartialEq, Copy, Clone)]
+enum Node {
+    Unused,
+    Used,
+    Split,
+    Full,
+}
 
 pub struct BuddyAllocator {
     levels: usize,
-    pub tree: vec::Vec<u8>,
+    tree: vec::Vec<Node>,
 }
 
 impl BuddyAllocator {
@@ -16,20 +19,20 @@ impl BuddyAllocator {
         let size: usize = (1 << levels + 1) - 1;
         return BuddyAllocator{
             levels: levels,
-            tree: vec![NODE_UNUSED; size],
+            tree: vec![Node::Unused; size],
         };
     }
     
-    // Takes a size (# of blocks requested) and returns an index offset
+    // Takes a size (# of pages requested) and returns an index offset
     pub fn allocate(&mut self, s: usize) -> isize {
-        // Get the number of blocks requested
-        let requested_blocks: f64;
+        // Get the number of pages requested
+        let requested_pages;
         if s == 0 {
-            requested_blocks = 1.0;
+            requested_pages = 1;
         } else {
-            requested_blocks = s.next_power_of_two() as f64;
+            requested_pages = s.next_power_of_two();
         }
-        let requested_level = requested_blocks.log(2.0) as usize;
+        let requested_level = self.log_base_2(requested_pages);
         if requested_level > self.levels {
             return -1;
         }
@@ -41,32 +44,31 @@ impl BuddyAllocator {
             let has_buddy = index & 1 == 1;
             if current_level != requested_level {
                 match self.tree[index] { 
-                    NODE_USED | NODE_FULL => {
+                    Node::Used | Node::Full => {
                         // Check the buddy node if we haven't already
                         if has_buddy {
                             index += 1;
                         }
                         continue 'forward;
                     }
-                    NODE_UNUSED => {
+                    Node::Unused => {
                         // Split the node and descend
-                        self.tree[index] = NODE_SPLIT;
+                        self.tree[index] = Node::Split;
                         index = index * 2 + 1;
                         current_level -= 1;
                         continue 'forward;
                     }
-                    NODE_SPLIT => {
+                    Node::Split => {
                         // Just descend
                         index = index * 2 + 1;
                         current_level -= 1;
                         continue 'forward;
                     }
-                    _ => panic!("unknkown type {}", self.tree[index])
                 }
             } else {
                 // Requested level and current level match up
-                if self.tree[index] == NODE_UNUSED {
-                    self.tree[index] = NODE_USED;
+                if self.tree[index] == Node::Unused {
+                    self.tree[index] = Node::Used;
                     // Recursively check if parents are full and mark them as such
                     self.update_parents((index + 1) / 2 - 1);
                     break 'forward;
@@ -89,7 +91,11 @@ impl BuddyAllocator {
             }
         }
 
-        return index as isize;
+        // Calculate page offset based on level
+        let current_level_offset = (1 << self.levels - current_level) - 1;
+        let level_offset = index - current_level_offset;
+        let page_offset = level_offset * 1 << current_level;
+        page_offset as isize
     }
 
     pub fn free(&mut self, index_offset: usize) {
@@ -104,7 +110,7 @@ impl BuddyAllocator {
     }
 
     fn free_and_combine(&mut self, index: usize) {
-        self.tree[index] = NODE_UNUSED;
+        self.tree[index] = Node::Unused;
         // We are already at the top of the tree, we're done
         if index == 0 {
             return;
@@ -117,7 +123,7 @@ impl BuddyAllocator {
             other_node = index - 1;
         }
         // Recursively combine nodes
-        if self.tree[other_node] == NODE_UNUSED {
+        if self.tree[other_node] == Node::Unused {
             self.free_and_combine((index + 1) / 2 - 1);
         }
         return;
@@ -128,23 +134,35 @@ impl BuddyAllocator {
         // Check both child nodes to see if they are both either FULL or USED
         let left_child = index * 2 + 1;
         let right_child = index * 2 + 2;
-        let left_child_used_or_full = self.tree[left_child] == NODE_FULL || self.tree[left_child] == NODE_USED;
-        let right_child_used_or_full = self.tree[right_child] == NODE_FULL || self.tree[right_child] == NODE_USED;
+        let left_child_used_or_full = self.tree[left_child] == Node::Full || self.tree[left_child] == Node::Used;
+        let right_child_used_or_full = self.tree[right_child] == Node::Full || self.tree[right_child] == Node::Used;
         if left_child_used_or_full && right_child_used_or_full {
             // Both children USED or FULL
-            self.tree[index] = NODE_FULL;
-        } else if self.tree[left_child] == NODE_UNUSED && self.tree[right_child] == NODE_UNUSED {
+            self.tree[index] = Node::Full;
+        } else if self.tree[left_child] == Node::Unused && self.tree[right_child] == Node::Unused {
             // Both children are UNUSED
-            self.tree[index] = NODE_UNUSED;
+            self.tree[index] = Node::Unused;
         } else {
             // Default to split node if neither FULL or UNUSED
-            self.tree[index] = NODE_SPLIT;
+            self.tree[index] = Node::Split;
         }
         // We're at the top of the tree, we're done
         if index == 0 {
             return;
         }
         self.update_parents((index + 1) / 2 - 1);
+    }
+
+    // Finds the position of the most signifcant bit
+    fn log_base_2(&self, requested_pages: usize) -> usize {
+        let mut exp = 0;
+        let mut find_msb_bit = requested_pages;
+        find_msb_bit >>= 1;
+        while find_msb_bit > 0 {
+            find_msb_bit >>= 1;
+            exp += 1;
+        }
+        return exp;
     }
 
     pub fn dump(&self) -> String { 
@@ -157,11 +175,10 @@ impl BuddyAllocator {
                 break
             }
             match self.tree[index] {
-                NODE_USED => row += "U",
-                NODE_UNUSED => row += "O",
-                NODE_SPLIT => row += "S",
-                NODE_FULL => row += "F",
-                _ => panic!("unknown node type {}", self.tree[index]),
+                Node::Used => row += "U",
+                Node::Unused => row += "O",
+                Node::Split => row += "S",
+                Node::Full => row += "F",
             }
             if row.len() == 1 << level {
                 out += &(row + "\n");
