@@ -22,17 +22,11 @@ impl BuddyAllocator {
             tree: vec![Node::Unused; size],
         };
     }
-    
+
     // Takes a size (# of pages requested) and returns an index offset
-    pub fn allocate(&mut self, s: usize) -> isize {
-        // Get the number of pages requested
-        let requested_pages;
-        if s == 0 {
-            requested_pages = 1;
-        } else {
-            requested_pages = s.next_power_of_two();
-        }
-        let requested_level = self.log_base_2(requested_pages);
+    pub fn allocate(&mut self, num_pages: usize) -> isize {
+        // Get the requested level from number of pages requested
+        let requested_level = self.get_level_from_num_pages(num_pages);
         if requested_level > self.levels {
             return -1;
         }
@@ -43,7 +37,7 @@ impl BuddyAllocator {
         'forward: loop {
             let has_buddy = index & 1 == 1;
             if current_level != requested_level {
-                match self.tree[index] { 
+                match self.tree[index] {
                     Node::Used | Node::Full => {
                         // Check the buddy node if we haven't already
                         if has_buddy {
@@ -81,6 +75,10 @@ impl BuddyAllocator {
             }
             // Backtrack if we reach a level match AND we've checked both nodes
             'backward: loop {
+                // Give up if we have backtracked to the top of the tree
+                if index == 0 {
+                    return -1;
+                }
                 index = (index + 1) / 2 - 1;
                 current_level += 1;
                 let has_buddy_inner = index & 1 == 1;
@@ -94,17 +92,23 @@ impl BuddyAllocator {
         // Calculate page offset based on level
         let current_level_offset = (1 << self.levels - current_level) - 1;
         let level_offset = index - current_level_offset;
-        let page_offset = level_offset * 1 << current_level;
+        let page_offset = level_offset * (1 << current_level);
         page_offset as isize
     }
 
-    pub fn free(&mut self, index_offset: usize) {
+	// usage of free must match up to allocate as `num_pages` will be used to infer a page level
+	pub fn free(&mut self, num_pages: usize, page_offset: usize) {
+		let requested_level = self.get_level_from_num_pages(num_pages);
+		// infer index offset from page_offset
+        let level_offset = page_offset / (1 << requested_level);
+        let current_level_offset = (1 << self.levels - requested_level) - 1;
+        let index_offset = current_level_offset + level_offset;
         if index_offset > self.tree.len() - 1 {
             panic!("offset {} is > length of tree {}", index_offset, self.tree.len());
         }
         // Recursively free and combine nodes
         self.free_and_combine(index_offset);
-        
+
         // Recursively update parents
         self.update_parents((index_offset + 1) / 2 - 1);
     }
@@ -153,6 +157,18 @@ impl BuddyAllocator {
         self.update_parents((index + 1) / 2 - 1);
     }
 
+	fn get_level_from_num_pages(&self, num_pages: usize) -> usize {
+		// Get the number of pages requested
+		let requested_pages;
+		if num_pages == 0 {
+			requested_pages = 1;
+		} else {
+			requested_pages = num_pages.next_power_of_two();
+		}
+		let requested_level = self.log_base_2(requested_pages);
+		requested_level
+	}
+
     // Finds the position of the most signifcant bit
     fn log_base_2(&self, requested_pages: usize) -> usize {
         let mut exp = 0;
@@ -165,7 +181,7 @@ impl BuddyAllocator {
         return exp;
     }
 
-    pub fn dump(&self) -> String { 
+    pub fn dump(&self) -> String {
         let mut out = "".to_string();
         let mut row = "".to_string();
         let mut level = 0;

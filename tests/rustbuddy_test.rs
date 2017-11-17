@@ -29,8 +29,8 @@ fn it_allocates_one_page() {
 #[test]
 fn it_frees_one_page() {
     let mut buddy = rustbuddy::BuddyAllocator::new(4);
-    buddy.allocate(1);
-    buddy.free(15);
+    let page_offset = buddy.allocate(1);
+    buddy.free(1, page_offset as usize);
     assert_eq!("\
        O\n\
        OO\n\
@@ -62,12 +62,12 @@ fn it_allocates_and_frees_many_pages() {
        FFSUOOOO\n\
        UUUUUOOOOOOOOOOO\n",
        buddy.dump());
-	buddy.free(19);
-	buddy.free(18);
-	buddy.free(17);
-	buddy.free(10);
-	buddy.free(16);
-	buddy.free(15);
+	buddy.free(1, page_offset as usize);
+	buddy.free(1, page_offset1 as usize);
+	buddy.free(1, page_offset2 as usize);
+	buddy.free(1, page_offset3 as usize);
+	buddy.free(1, page_offset4 as usize);
+	buddy.free(2, page_offset5 as usize);
     assert_eq!("\
        O\n\
        OO\n\
